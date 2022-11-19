@@ -1,0 +1,58 @@
+; iris
+;   Auto pull : false
+;   OSR threshould  : 9bit
+; 133MHz, T=7ns
+
+.program iris
+.side_set 1
+    pull         side 0b01;       blocks
+    out pins, 10 side 0b00 [1];
+    nop          side 0b01; needs 15ns
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include "hardware/gpio.h"
+
+#define PIN_COUNT 10
+
+static inline void pio_iris_program_init(
+    PIO pio,
+    uint sm
+    )
+{
+    const uint offset = pio_add_program(pio,&iris_program);
+    // GPIOの設定
+    for(uint8_t i=0;i<PIN_COUNT;i++) {
+        pio_gpio_init(pio, i+2);
+    }
+    pio_gpio_init(pio, 15);
+    pio_sm_set_consecutive_pindirs(pio, sm, 2, PIN_COUNT, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, 15, 1, true);
+    
+    //pio_sm_set_sideset_pins(pio, sm, 15);
+
+    // ステートマシンの設定
+    pio_sm_config c = iris_program_get_default_config(offset);
+    
+    // OSR shift_right, auto_pull, threshould
+    sm_config_set_out_shift(&c, true, false, 32);
+    
+    sm_config_set_out_pins(&c, 2, PIN_COUNT);
+    // set is 5bit lol
+    //sm_config_set_set_pins(&c, 2, PIN_COUNT);
+    
+    sm_config_set_sideset(&c, 1, false, false);
+    sm_config_set_sideset_pins(&c, 15);
+    
+    // all the FIFOs is TX
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    //sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / (100000000UL));
+    sm_config_set_clkdiv(&c, 1.f);
+
+    // start state machine
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+%}

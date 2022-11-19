@@ -1,0 +1,9 @@
+.*
+bmp/
+build/
+Data/
+*.bin
+*.uf2
+*.out
+*.exe
+!.gitignore
