@@ -22,5 +22,5 @@ pico_sdk_init()
 add_executable(${Name} main.c)
 pico_generate_pio_header(${Name} ${CMAKE_CURRENT_LIST_DIR}/asm.pio)
 
-target_link_libraries(${Name} pico_stdlib hardware_pio pico_multicore)
+target_link_libraries(${Name} pico_stdlib hardware_pio pico_multicore hardware_dma)
 pico_add_extra_outputs(${Name})

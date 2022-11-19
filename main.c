@@ -1,15 +1,17 @@
 #include <stdio.h>
+#include <string.h>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
+#include "hardware/dma.h"
 #include "asm.pio.h"
-#include <string.h>
 
 #define PIO_IRIS_SM 1
 #define PIO_ID pio1
 #define DATA 0x0100
 #define COMMAND 0x0000
 static void init_iris(void);
-
+static void init_dma(void);
+int dma_channel;
 #define HEADER_LEN 1
 #define LCD_WIDTH 128
 #define LCD_HEIGHT 132
@@ -34,7 +36,8 @@ void reset_lcd_data() {
     memcpy(dma_data+DMA_LEN, header, sizeof(header));
 }
 
-#define MULTICORE 1
+#define MULTICORE 0
+#define DMA 1
 #define PIXELS (128*96)
 
 void core1_entry(void) {
@@ -45,6 +48,8 @@ void core1_entry(void) {
     uint32_t data_pos = 0;
     uint16_t *dma_head;
     uint16_t dma_pos = 1;
+    uint8_t buf[SECTOR_SIZE];
+    uint32_t sector_index = 0;
 #if MULTICORE
     uint32_t released_id;
     multicore_fifo_push_blocking(1);
@@ -55,31 +60,39 @@ void core1_entry(void) {
 #endif
     
     while(true) {
-        memcpy(&count, (uint8_t*)XIP_BASE+0x10000+data_pos, 1);
-        data_pos++;
-        while(count) {
-            dma_head[dma_pos++] = color ? 0x1FF : 0x100;
-            dma_head[dma_pos++] = color ? 0x1FF : 0x100;
-            count--;
-        }
-        color = !color;
-        if( dma_pos>=1+PIXELS*2 ) {
-#if MULTICORE
-            multicore_fifo_push_blocking(released_id & 1);
-            released_id = multicore_fifo_pop_blocking() & 1;
-            dma_head = dma_data+released_id*DMA_LEN;
-#else
-            gpio_put(25, true);
-            for(uint16_t i=0; i<1+2*PIXELS; i++) {
-                pio_sm_put_blocking(PIO_ID, PIO_IRIS_SM, dma_head[i]);
+        memcpy(buf, (uint8_t*)XIP_BASE+0x10000+SECTOR_SIZE*sector_index++, SECTOR_SIZE);
+        data_pos = 0;
+        while(data_pos<4096) {
+            count = buf[data_pos++];
+            while(count) {
+                dma_head[dma_pos++] = color ? 0x1FF : 0x100;
+                dma_head[dma_pos++] = color ? 0x1FF : 0x100;
+                count--;
             }
-            gpio_put(25, false);
+            color = !color;
+            if( dma_pos>=1+PIXELS*2 ) {
+#if MULTICORE
+                multicore_fifo_push_blocking(released_id & 1);
+                released_id = multicore_fifo_pop_blocking() & 1;
+                dma_head = dma_data+released_id*DMA_LEN;
+#else
+                gpio_put(25, true);
+#if DMA
+                while( dma_channel_is_busy(dma_channel) );
+                dma_channel_set_read_addr(dma_channel, dma_head, true);
+#else
+                for(uint16_t i=0; i<1+2*PIXELS; i++) {
+                    pio_sm_put_blocking(PIO_ID, PIO_IRIS_SM, dma_head[i]);
+                }
 #endif
-            dma_pos = 1;
-            frame_remain--;
-            color = false;
-            if(! frame_remain ) {
-                break;
+                gpio_put(25, false);
+#endif
+                dma_pos = 1;
+                frame_remain--;
+                color = false;
+                if(! frame_remain ) {
+                    return;
+                }
             }
         }
     }
@@ -89,12 +102,13 @@ void core1_entry(void) {
 int main()
 {
     stdio_init_all();
-    set_sys_clock_khz(182000, true);
+    set_sys_clock_khz(250000, true);
     reset_lcd_data();
     
     multicore_fifo_push_blocking(0);
     
     init_iris();
+    init_dma();
     
     gpio_init(25);
     gpio_set_dir(25, true);
@@ -103,7 +117,7 @@ int main()
 #if MULTICORE
     while(true) {
         uint32_t write_id = multicore_fifo_pop_blocking() & 1;
-        
+
         gpio_put(25, true);
         for(uint16_t i=0; i<1+2*PIXELS; i++) {
             pio_sm_put_blocking(PIO_ID, PIO_IRIS_SM, dma_data[i+write_id*DMA_LEN]);
@@ -190,5 +204,24 @@ static void init_iris(void) {
 	gpio_init(14);
 	gpio_set_dir(14, true); // set output
 	reset_iris();
+}
+
+static void init_dma(void) {
+    dma_channel = dma_claim_unused_channel(true);
+    
+    dma_channel_config c = dma_channel_get_default_config(dma_channel);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_write_increment(&c, false);
+    channel_config_set_dreq(&c, DREQ_PIO1_TX1); // DREQ_PIO0_TX0
+    
+    dma_channel_configure(
+        dma_channel,          // Channel to be configured
+        &c,            // The configuration we just created
+        PIO_ID->txf+1,           // The initial write address
+        dma_data,           // The initial read address
+        DMA_LEN, // Number of transfers; in this case each is 2 byte.
+        false           // Start immediately.
+    );
 }
 

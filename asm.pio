@@ -6,7 +6,8 @@
 .program iris
 .side_set 1
     pull         side 0b01;       blocks
-    out pins, 10 side 0b00 [1];
+    nop          side 0b00;
+    out pins, 10 side 0b00;
     nop          side 0b01; needs 15ns
 .wrap
 
@@ -48,7 +49,7 @@ static inline void pio_iris_program_init(
     // all the FIFOs is TX
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
     //sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / (100000000UL));
-    sm_config_set_clkdiv(&c, 1.f);
+    sm_config_set_clkdiv(&c, 3.5);
 
     // start state machine
     pio_sm_init(pio, sm, offset, &c);
